@@ -310,3 +310,55 @@ def ensure_schema() -> None:
             kind TEXT NOT NULL,
             status TEXT NOT NULL,
             created_at INTEGER NOT NULL,
+            started_at INTEGER,
+            finished_at INTEGER,
+            last_heartbeat_at INTEGER,
+            progress REAL NOT NULL DEFAULT 0,
+            result_json TEXT,
+            error TEXT
+        );
+        """,
+    ]
+    with db() as conn:
+        for stmt in schema:
+            conn.execute(stmt)
+        # Seed meta if missing.
+        conn.execute("INSERT OR IGNORE INTO meta(k, v) VALUES(?, ?)", ("platform_id", CONFIG.platform_id_hex))
+        conn.execute("INSERT OR IGNORE INTO meta(k, v) VALUES(?, ?)", ("audit_tag", CONFIG.audit_tag_hex))
+        conn.execute("INSERT OR IGNORE INTO meta(k, v) VALUES(?, ?)", ("schema_version", "7"))
+
+
+def pbkdf2_hash(password: str, salt: str, rounds: int = 200_000) -> str:
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), rounds, dklen=32)
+    return f"pbkdf2_sha256${rounds}${salt}${base64.b64encode(dk).decode('ascii')}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        algo, rounds_s, salt, b64 = stored.split("$", 3)
+        if algo != "pbkdf2_sha256":
+            return False
+        rounds = int(rounds_s)
+        check = pbkdf2_hash(password, salt, rounds=rounds)
+        return hmac.compare_digest(check, stored)
+    except Exception:
+        return False
+
+
+def audit(action: str, actor_user_id: str | None, details: dict[str, t.Any]) -> None:
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO audit_log(id, ts, actor_user_id, action, details_json, ip, user_agent) VALUES(?,?,?,?,?,?,?)",
+            (
+                str(uuid.uuid4()),
+                utc_ts(),
+                actor_user_id,
+                action,
+                json_dumps(details),
+                request.remote_addr,
+                request.headers.get("User-Agent"),
+            ),
+        )
+
+
+def require_local_write() -> None:
