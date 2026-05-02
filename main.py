@@ -466,3 +466,55 @@ def auth_context() -> dict[str, t.Any] | None:
     if api_key:
         ak = api_key_validate(api_key)
         if ak:
+            return {"kind": "api_key", "user_id": ak["user_id"], "email": ak["email"], "is_admin": bool(ak["is_admin"])}
+        return None
+    sid = get_cookie(SESSION_COOKIE)
+    if not sid:
+        return None
+    sess = session_load(sid)
+    if not sess:
+        return None
+    session_touch(sid)
+    with db() as conn:
+        u = conn.execute("SELECT id, email, is_admin FROM users WHERE id = ?", (sess["user_id"],)).fetchone()
+        if not u:
+            return None
+        return {
+            "kind": "session",
+            "session_id": sid,
+            "csrf": sess["csrf_token"],
+            "user_id": u["id"],
+            "email": u["email"],
+            "is_admin": bool(u["is_admin"]),
+        }
+
+
+def require_auth() -> dict[str, t.Any]:
+    ctx = auth_context()
+    if not ctx:
+        abort(make_response(jsonify({"ok": False, "error": "auth"}), 401))
+    return ctx
+
+
+def require_admin() -> dict[str, t.Any]:
+    ctx = require_auth()
+    if not ctx.get("is_admin"):
+        abort(make_response(jsonify({"ok": False, "error": "admin"}), 403))
+    return ctx
+
+
+def require_mutation(ctx: dict[str, t.Any]) -> None:
+    if ctx.get("kind") == "session":
+        with db() as conn:
+            r = conn.execute("SELECT csrf_token FROM sessions WHERE id = ?", (ctx["session_id"],)).fetchone()
+            if not r:
+                abort(make_response(jsonify({"ok": False, "error": "auth"}), 401))
+            sess = {"csrf_token": r["csrf_token"]}
+        require_csrf(sess)
+
+
+def api_ok(data: t.Any = None, **extra) -> Response:
+    body = {"ok": True, "data": data}
+    body.update(extra)
+    return jsonify(body)
+
