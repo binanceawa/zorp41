@@ -570,3 +570,55 @@ def seed_admin_if_needed() -> None:
         conn.execute(
             "INSERT INTO portfolios(id, user_id, label, base_currency, created_at) VALUES(?,?,?,?,?)",
             (pid, user_id, "Primary", "USD", utc_ts()),
+        )
+        set_meta("bootstrap_email", email)
+        set_meta("bootstrap_password", password)
+
+
+def seed_demo_vault_if_needed() -> None:
+    with db() as conn:
+        r = conn.execute("SELECT COUNT(*) AS n FROM vaults").fetchone()
+        if r and int(r["n"]) > 0:
+            return
+        vid = random_public_id("vlt")
+        conn.execute(
+            "INSERT INTO vaults(id, name, chain, asset_symbol, asset_decimals, address, created_at, status, deposit_cap, mgmt_fee_bps_per_year, perf_fee_bps) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                vid,
+                "Nimbrex Gate Vault",
+                "EVM-mainnet",
+                "USDC",
+                6,
+                None,
+                utc_ts(),
+                "draft",
+                25_000_000.0,
+                175,
+                900,
+            ),
+        )
+        base_params = {"notes": "seeded", "rebalance_window_sec": 21600, "oracle_mode": "sim"}
+        strat_rows = [
+            (random_public_id("st"), vid, "Delta Carry", "carry", "B", 0.35, 12_000_000.0, 1, utc_ts(), json_dumps({**base_params, "leverage": 1.6})),
+            (random_public_id("st"), vid, "Range Maker", "market_making", "C", 0.25, 8_000_000.0, 1, utc_ts(), json_dumps({**base_params, "bands": 5})),
+            (random_public_id("st"), vid, "Trend Pulse", "momentum", "B", 0.25, 9_000_000.0, 1, utc_ts(), json_dumps({**base_params, "lookback_days": 28})),
+            (random_public_id("st"), vid, "Stable Yield", "lending", "A", 0.15, 6_000_000.0, 1, utc_ts(), json_dumps({**base_params, "utilization_cap": 0.82})),
+        ]
+        conn.executemany(
+            "INSERT INTO strategies(id, vault_id, name, kind, risk_grade, target_weight, max_debt, enabled, created_at, params_json) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            strat_rows,
+        )
+
+
+# -----------------------------
+# Market simulation + pricing
+# -----------------------------
+
+@dataclasses.dataclass
+class PricePoint:
+    symbol: str
+    ts: int
+    px: float
+    source: str
