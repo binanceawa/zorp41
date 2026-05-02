@@ -986,3 +986,55 @@ def backtest_run(p: BacktestParams) -> dict[str, t.Any]:
     max_dd = 0.0
     for x in equity_curve:
         e = float(x["equity"])
+        if e > peak:
+            peak = e
+        dd = (peak - e) / peak if peak > 0 else 0.0
+        max_dd = max(max_dd, dd)
+
+    return {
+        "ok": True,
+        "params": dataclasses.asdict(p),
+        "summary": {
+            "equity_start": float(eq0),
+            "equity_end": float(eqN),
+            "return": float(ret),
+            "max_drawdown": float(max_dd),
+            "trades": int(len(trades)),
+        },
+        "equity_curve": equity_curve,
+        "trades": trades[:2000],
+    }
+
+
+# -----------------------------
+# Background jobs
+# -----------------------------
+
+class JobRunner:
+    def __init__(self):
+        self._stop = threading.Event()
+        self._threads: list[threading.Thread] = []
+
+    def start(self):
+        t1 = threading.Thread(target=self._price_pump_loop, name="zorp41-price-pump", daemon=True)
+        t2 = threading.Thread(target=self._signal_loop, name="zorp41-signal", daemon=True)
+        self._threads = [t1, t2]
+        for t_ in self._threads:
+            t_.start()
+
+    def stop(self):
+        self._stop.set()
+        for t_ in self._threads:
+            t_.join(timeout=1.5)
+
+    def _price_pump_loop(self):
+        # Keep a rolling price series for key symbols.
+        symbols = ["USDC", "ETH", "BTC", "SOL", "ARB", "OP"]
+        while not self._stop.is_set():
+            try:
+                ts = utc_ts()
+                # Snap to 5-minute grid for reproducibility.
+                ts = ts - (ts % 300)
+                for sym in symbols:
+                    px = MARKET.px_at(sym, ts)
+                    price_upsert(sym, ts, px, "sim")
