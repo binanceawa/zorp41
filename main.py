@@ -726,3 +726,55 @@ def price_series(symbol: str, start_ts: int, end_ts: int, step_sec: int) -> list
 # -----------------------------
 # Risk + allocation engine
 # -----------------------------
+
+@dataclasses.dataclass
+class StrategyModel:
+    id: str
+    vault_id: str
+    name: str
+    kind: str
+    risk_grade: str
+    target_weight: float
+    max_debt: float
+    enabled: bool
+    params: dict[str, t.Any]
+
+
+RISK_GRADE_TO_VOL = {"A": 0.08, "B": 0.14, "C": 0.22, "D": 0.35}
+
+
+def parse_strategy_row(r: sqlite3.Row) -> StrategyModel:
+    return StrategyModel(
+        id=str(r["id"]),
+        vault_id=str(r["vault_id"]),
+        name=str(r["name"]),
+        kind=str(r["kind"]),
+        risk_grade=str(r["risk_grade"]),
+        target_weight=float(r["target_weight"]),
+        max_debt=float(r["max_debt"]),
+        enabled=bool(r["enabled"]),
+        params=json.loads(str(r["params_json"] or "{}")),
+    )
+
+
+def vault_get(vault_id: str) -> dict[str, t.Any] | None:
+    with db() as conn:
+        r = conn.execute("SELECT * FROM vaults WHERE id = ?", (vault_id,)).fetchone()
+        return row_to_dict(r) if r else None
+
+
+def vault_strategies(vault_id: str) -> list[StrategyModel]:
+    with db() as conn:
+        rows = conn.execute("SELECT * FROM strategies WHERE vault_id = ? ORDER BY created_at ASC", (vault_id,)).fetchall()
+        return [parse_strategy_row(r) for r in rows]
+
+
+def normalize_weights(strats: list[StrategyModel]) -> dict[str, float]:
+    enabled = [s for s in strats if s.enabled and s.target_weight > 0]
+    total = sum(s.target_weight for s in enabled)
+    if total <= 0:
+        return {s.id: 0.0 for s in strats}
+    return {s.id: (s.target_weight / total) for s in strats}
+
+
+def risk_budget_for_vault(vault: dict[str, t.Any]) -> float:
