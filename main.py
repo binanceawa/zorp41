@@ -882,3 +882,55 @@ def signal_for_vault(vault: dict[str, t.Any], horizon: str) -> dict[str, t.Any]:
     fee_drag = (float(vault.get("mgmt_fee_bps_per_year") or 0) / 10_000.0) * 0.55
     appetite = clamp((cap / 25_000_000.0) ** 0.09, 0.9, 1.1) * (1.0 - fee_drag)
     # Score 0..1
+    p = clamp((px - 2800.0) / 1600.0, -1.0, 1.0)
+    h = {"1d": 0.7, "7d": 0.85, "30d": 1.0}.get(horizon, 0.9)
+    score = clamp(0.52 + 0.23 * p * h * appetite, 0.02, 0.98)
+    rationale = (
+        f"Market proxy ETH={px:,.2f}. Appetite={appetite:.3f}. "
+        f"Horizon={horizon}. Score blends proxy momentum and fee-adjusted capacity."
+    )
+    payload = {"proxy": {"symbol": "ETH", "px": px}, "appetite": appetite, "horizon": horizon}
+    return {"horizon": horizon, "score": score, "rationale": rationale, "payload": payload}
+
+
+# -----------------------------
+# Backtesting
+# -----------------------------
+
+@dataclasses.dataclass
+class BacktestParams:
+    symbol: str
+    start_ts: int
+    end_ts: int
+    step_sec: int
+    fee_bps: float
+    slippage_bps: float
+    strategy: str
+
+
+def backtest_run(p: BacktestParams) -> dict[str, t.Any]:
+    series = price_series(p.symbol, p.start_ts, p.end_ts, p.step_sec)
+    if len(series) < 3:
+        return {"ok": False, "error": "insufficient_series"}
+
+    # Toy strategies; deterministic & fast.
+    cash = 1.0
+    pos = 0.0
+    equity_curve = []
+    trades = []
+
+    def equity(px: float) -> float:
+        return cash + pos * px
+
+    last_px = series[0].px
+    ma_fast = last_px
+    ma_slow = last_px
+
+    for i, pt in enumerate(series):
+        px = pt.px
+        ma_fast = 0.88 * ma_fast + 0.12 * px
+        ma_slow = 0.96 * ma_slow + 0.04 * px
+        edge = ma_fast - ma_slow
+
+        # Signal: momentum / mean reversion / carry proxy
+        want = 0.0
