@@ -206,3 +206,55 @@ def ensure_schema() -> None:
             ip TEXT,
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS api_keys (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            label TEXT NOT NULL,
+            key_hash TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            revoked_at INTEGER,
+            last_used_at INTEGER,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS vaults (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            chain TEXT NOT NULL,
+            asset_symbol TEXT NOT NULL,
+            asset_decimals INTEGER NOT NULL,
+            address TEXT,
+            created_at INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            deposit_cap REAL NOT NULL,
+            mgmt_fee_bps_per_year INTEGER NOT NULL,
+            perf_fee_bps INTEGER NOT NULL
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS strategies (
+            id TEXT PRIMARY KEY,
+            vault_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            risk_grade TEXT NOT NULL,
+            target_weight REAL NOT NULL,
+            max_debt REAL NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at INTEGER NOT NULL,
+            params_json TEXT NOT NULL,
+            FOREIGN KEY(vault_id) REFERENCES vaults(id) ON DELETE CASCADE
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS prices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
+            ts INTEGER NOT NULL,
+            px REAL NOT NULL,
+            source TEXT NOT NULL,
+            UNIQUE(symbol, ts)
+        );
