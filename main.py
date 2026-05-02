@@ -414,3 +414,55 @@ def session_create(user_id: str) -> dict[str, str]:
     created = utc_ts()
     exp = created + SESSION_TTL_SECONDS
     with db() as conn:
+        conn.execute(
+            "INSERT INTO sessions(id, user_id, csrf_token, created_at, expires_at, last_seen_at, user_agent, ip) VALUES(?,?,?,?,?,?,?,?)",
+            (
+                sid,
+                user_id,
+                csrf,
+                created,
+                exp,
+                created,
+                request.headers.get("User-Agent"),
+                request.remote_addr,
+            ),
+        )
+    return {"session_id": sid, "csrf": csrf}
+
+
+def session_destroy(session_id: str) -> None:
+    with db() as conn:
+        conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+
+
+def require_csrf(sess: dict[str, t.Any]) -> None:
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        got = request.headers.get(CSRF_HEADER, "")
+        if not got or not hmac.compare_digest(got, str(sess["csrf_token"])):
+            abort(make_response(jsonify({"ok": False, "error": "csrf"}), 403))
+
+
+def api_key_hash(key: str) -> str:
+    return sha256_hex(("zorp41:" + key).encode("utf-8"))
+
+
+def api_key_validate(key: str) -> dict[str, t.Any] | None:
+    h = api_key_hash(key)
+    with db() as conn:
+        r = conn.execute(
+            "SELECT api_keys.*, users.email, users.is_admin FROM api_keys JOIN users ON users.id = api_keys.user_id "
+            "WHERE api_keys.key_hash = ? AND api_keys.revoked_at IS NULL",
+            (h,),
+        ).fetchone()
+        if not r:
+            return None
+        conn.execute("UPDATE api_keys SET last_used_at = ? WHERE id = ?", (utc_ts(), r["id"]))
+        return row_to_dict(r)
+
+
+def auth_context() -> dict[str, t.Any] | None:
+    # Priority: API key (for programmatic use) then browser session.
+    api_key = request.headers.get(API_KEY_HEADER)
+    if api_key:
+        ak = api_key_validate(api_key)
+        if ak:
