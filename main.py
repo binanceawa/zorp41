@@ -934,3 +934,55 @@ def backtest_run(p: BacktestParams) -> dict[str, t.Any]:
 
         # Signal: momentum / mean reversion / carry proxy
         want = 0.0
+        if p.strategy == "momentum":
+            want = 1.0 if edge > 0 else 0.0
+        elif p.strategy == "mean_reversion":
+            want = 1.0 if (px < ma_slow * 0.992) else 0.0
+        elif p.strategy == "carry":
+            # Always hold small risk-on.
+            want = 0.35 + 0.15 * (1.0 if edge > 0 else -1.0)
+            want = clamp(want, 0.0, 1.0)
+        else:
+            want = 0.5 + 0.2 * (1.0 if edge > 0 else -1.0)
+            want = clamp(want, 0.0, 1.0)
+
+        eq = equity(px)
+        target_pos_value = eq * want
+        target_pos = target_pos_value / px if px > 0 else 0.0
+
+        # Trade if gap meaningful
+        if abs(target_pos - pos) > 0.0001:
+            delta = target_pos - pos
+            notional = abs(delta) * px
+            fee = notional * (p.fee_bps / 10_000.0)
+            slip = notional * (p.slippage_bps / 10_000.0)
+            cost = fee + slip
+            # Execute: buy/sell
+            if delta > 0:
+                # buy
+                spend = delta * px + cost
+                if spend > cash:
+                    # scale down
+                    delta = max(0.0, (cash - cost) / px)
+                    spend = delta * px + cost
+                cash -= spend
+                pos += delta
+            else:
+                # sell
+                sell_qty = min(pos, -delta)
+                proceeds = sell_qty * px - cost
+                pos -= sell_qty
+                cash += proceeds
+            trades.append({"ts": pt.ts, "px": px, "delta": delta, "fee": fee, "slip": slip})
+
+        equity_curve.append({"ts": pt.ts, "equity": equity(px), "px": px, "ma_fast": ma_fast, "ma_slow": ma_slow})
+        last_px = px
+
+    eq0 = equity_curve[0]["equity"]
+    eqN = equity_curve[-1]["equity"]
+    ret = (eqN / eq0) - 1.0 if eq0 else 0.0
+    # Drawdown
+    peak = -1e18
+    max_dd = 0.0
+    for x in equity_curve:
+        e = float(x["equity"])
