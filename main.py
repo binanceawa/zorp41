@@ -258,3 +258,55 @@ def ensure_schema() -> None:
             source TEXT NOT NULL,
             UNIQUE(symbol, ts)
         );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS signals (
+            id TEXT PRIMARY KEY,
+            vault_id TEXT NOT NULL,
+            ts INTEGER NOT NULL,
+            horizon TEXT NOT NULL,
+            score REAL NOT NULL,
+            rationale TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            FOREIGN KEY(vault_id) REFERENCES vaults(id) ON DELETE CASCADE
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS portfolios (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            label TEXT NOT NULL,
+            base_currency TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS portfolio_positions (
+            id TEXT PRIMARY KEY,
+            portfolio_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            qty REAL NOT NULL,
+            cost_basis REAL NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(portfolio_id, symbol),
+            FOREIGN KEY(portfolio_id) REFERENCES portfolios(id) ON DELETE CASCADE
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id TEXT PRIMARY KEY,
+            ts INTEGER NOT NULL,
+            actor_user_id TEXT,
+            action TEXT NOT NULL,
+            details_json TEXT NOT NULL,
+            ip TEXT,
+            user_agent TEXT
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS jobs (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
