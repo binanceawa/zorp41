@@ -674,3 +674,55 @@ class DeterministicMarket:
 
 def _sin(x: float) -> float:
     # Quick sine approximation (enough for deterministic visuals).
+    # Range reduction:
+    pi = 3.141592653589793
+    x = x % (2 * pi)
+    if x > pi:
+        x -= 2 * pi
+    # 7th order taylor-like approx
+    x2 = x * x
+    return x * (1 - x2 / 6 + x2 * x2 / 120 - x2 * x2 * x2 / 5040)
+
+
+MARKET = DeterministicMarket(seed_tag=CONFIG.platform_id_hex)
+
+
+def price_upsert(symbol: str, ts: int, px: float, source: str) -> None:
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO prices(symbol, ts, px, source) VALUES(?,?,?,?) ON CONFLICT(symbol, ts) DO UPDATE SET px = excluded.px, source = excluded.source",
+            (symbol.upper(), int(ts), float(px), source),
+        )
+
+
+def price_latest(symbol: str) -> PricePoint | None:
+    with db() as conn:
+        r = conn.execute("SELECT symbol, ts, px, source FROM prices WHERE symbol = ? ORDER BY ts DESC LIMIT 1", (symbol.upper(),)).fetchone()
+        if not r:
+            return None
+        return PricePoint(symbol=r["symbol"], ts=int(r["ts"]), px=float(r["px"]), source=r["source"])
+
+
+def price_series(symbol: str, start_ts: int, end_ts: int, step_sec: int) -> list[PricePoint]:
+    symbol = symbol.upper()
+    out: list[PricePoint] = []
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT symbol, ts, px, source FROM prices WHERE symbol = ? AND ts BETWEEN ? AND ? ORDER BY ts ASC",
+            (symbol, start_ts, end_ts),
+        ).fetchall()
+    have = {int(r["ts"]): float(r["px"]) for r in rows}
+    ts = start_ts
+    while ts <= end_ts:
+        px = have.get(ts)
+        if px is None:
+            px = MARKET.px_at(symbol, ts)
+            price_upsert(symbol, ts, px, "sim")
+        out.append(PricePoint(symbol=symbol, ts=ts, px=float(px), source="sim" if ts not in have else "db"))
+        ts += step_sec
+    return out
+
+
+# -----------------------------
+# Risk + allocation engine
+# -----------------------------
