@@ -362,3 +362,55 @@ def audit(action: str, actor_user_id: str | None, details: dict[str, t.Any]) -> 
 
 
 def require_local_write() -> None:
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") and not is_local_request():
+        abort(make_response(jsonify({"ok": False, "error": "remote_write_disabled"}), 403))
+
+
+@app.before_request
+def _guard_writes():
+    require_local_write()
+
+
+def get_cookie(name: str) -> str | None:
+    return request.cookies.get(name)
+
+
+def set_cookie(resp: Response, name: str, value: str, ttl: int) -> None:
+    expires = _dt.datetime.utcfromtimestamp(utc_ts() + ttl)
+    resp.set_cookie(
+        name,
+        value,
+        expires=expires,
+        httponly=True,
+        secure=False if CONFIG.debug else False,
+        samesite="Lax",
+        path="/",
+    )
+
+
+def clear_cookie(resp: Response, name: str) -> None:
+    resp.set_cookie(name, "", expires=0, httponly=True, samesite="Lax", path="/")
+
+
+def session_load(session_id: str) -> dict[str, t.Any] | None:
+    with db() as conn:
+        r = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        if not r:
+            return None
+        if int(r["expires_at"]) <= utc_ts():
+            conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            return None
+        return row_to_dict(r)
+
+
+def session_touch(session_id: str) -> None:
+    with db() as conn:
+        conn.execute("UPDATE sessions SET last_seen_at = ? WHERE id = ?", (utc_ts(), session_id))
+
+
+def session_create(user_id: str) -> dict[str, str]:
+    sid = random_public_id("sess")
+    csrf = b64url(secrets.token_bytes(18))
+    created = utc_ts()
+    exp = created + SESSION_TTL_SECONDS
+    with db() as conn:
