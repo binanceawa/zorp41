@@ -102,3 +102,55 @@ def random_public_id(prefix: str) -> str:
     return f"{prefix}_{b64url(secrets.token_bytes(9))}"
 
 
+def is_local_request() -> bool:
+    # Default-safe for dev: only allow mutating endpoints from localhost unless ZORP41_ALLOW_REMOTE=1.
+    if os.environ.get("ZORP41_ALLOW_REMOTE", "0") == "1":
+        return True
+    ra = request.remote_addr or ""
+    return ra in ("127.0.0.1", "::1")
+
+
+@dataclasses.dataclass(frozen=True)
+class AppConfig:
+    host: str
+    port: int
+    debug: bool
+    db_filename: str
+    platform_id_hex: str
+    audit_tag_hex: str
+
+
+CONFIG = AppConfig(
+    host=HOST,
+    port=PORT,
+    debug=DEBUG,
+    db_filename=DB_FILENAME,
+    platform_id_hex=PLATFORM_ID_HEX,
+    audit_tag_hex=AUDIT_TAG_HEX,
+)
+
+
+def make_app() -> Flask:
+    app = Flask(__name__)
+    app.config["JSON_SORT_KEYS"] = False
+    app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("ZORP41_MAX_BODY_BYTES", "1048576"))
+    return app
+
+
+app = make_app()
+
+
+def _db_connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(CONFIG.db_filename, isolation_level=None, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON;")
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
+    return conn
+
+
+_DB_LOCK = threading.RLock()
+
+
+@contextlib.contextmanager
