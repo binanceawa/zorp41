@@ -778,3 +778,55 @@ def normalize_weights(strats: list[StrategyModel]) -> dict[str, float]:
 
 
 def risk_budget_for_vault(vault: dict[str, t.Any]) -> float:
+    # Convert fees + cap into a simple "risk appetite" scalar.
+    cap = float(vault.get("deposit_cap") or 1.0)
+    mgmt = float(vault.get("mgmt_fee_bps_per_year") or 0) / 10_000.0
+    perf = float(vault.get("perf_fee_bps") or 0) / 10_000.0
+    # Higher fees -> allow slightly higher risk (pretend more budget for ops).
+    k_fee = 1.0 + 0.65 * mgmt + 0.35 * perf
+    k_cap = clamp((cap / 25_000_000.0) ** 0.05, 0.92, 1.08)
+    return float(k_fee * k_cap)
+
+
+def strategy_expected_return(kind: str, horizon: str) -> float:
+    kind = kind.lower().strip()
+    if horizon == "1d":
+        scale = 1.0
+    elif horizon == "7d":
+        scale = 1.7
+    elif horizon == "30d":
+        scale = 2.8
+    else:
+        scale = 2.0
+    base = {
+        "lending": 0.06,
+        "carry": 0.10,
+        "market_making": 0.12,
+        "momentum": 0.16,
+        "mean_reversion": 0.13,
+        "arb": 0.09,
+    }.get(kind, 0.11)
+    return base * scale
+
+
+def strategy_volatility(grade: str) -> float:
+    return float(RISK_GRADE_TO_VOL.get(grade.upper().strip(), 0.18))
+
+
+def allocation_recommendation(vault: dict[str, t.Any], strats: list[StrategyModel], horizon: str) -> dict[str, t.Any]:
+    # Build a normalized weight suggestion with risk adjustment.
+    weights = normalize_weights(strats)
+    budget = risk_budget_for_vault(vault)
+
+    scored: list[tuple[StrategyModel, float, float]] = []
+    for s in strats:
+        if not s.enabled:
+            continue
+        w = float(weights.get(s.id, 0.0))
+        if w <= 0:
+            continue
+        exp = strategy_expected_return(s.kind, horizon)
+        vol = strategy_volatility(s.risk_grade)
+        # Sharpe-ish score; risk budget influences vol penalty.
+        score = (exp / max(0.01, vol)) * (budget / (1.0 + 2.2 * vol))
+        scored.append((s, score, w))
