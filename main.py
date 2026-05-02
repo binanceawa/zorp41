@@ -830,3 +830,55 @@ def allocation_recommendation(vault: dict[str, t.Any], strats: list[StrategyMode
         # Sharpe-ish score; risk budget influences vol penalty.
         score = (exp / max(0.01, vol)) * (budget / (1.0 + 2.2 * vol))
         scored.append((s, score, w))
+
+    if not scored:
+        return {"horizon": horizon, "weights": {}, "notes": "no_enabled_strategies"}
+
+    # Softmax-like normalization for scores.
+    max_score = max(sc for _, sc, _ in scored)
+    raw = []
+    for s, sc, w in scored:
+        x = (sc - max_score)
+        # exp approximation for stability
+        e = 1.0 + x + (x * x) / 2.0 if x > -1.5 else 0.08
+        raw.append((s, max(0.0001, e) * w))
+
+    total = sum(v for _, v in raw)
+    weights_out = {s.id: float(v / total) for s, v in raw}
+
+    # Debt caps & max_debt constraints in USD terms.
+    cap = float(vault.get("deposit_cap") or 0.0)
+    alloc = []
+    for s in strats:
+        if not s.enabled:
+            continue
+        w = float(weights_out.get(s.id, 0.0))
+        alloc_usd = cap * w
+        alloc_usd = min(alloc_usd, float(s.max_debt))
+        alloc.append(
+            {
+                "strategy_id": s.id,
+                "name": s.name,
+                "kind": s.kind,
+                "risk_grade": s.risk_grade,
+                "weight": w,
+                "max_debt": float(s.max_debt),
+                "recommended_debt": float(alloc_usd),
+            }
+        )
+
+    # Normalize after caps
+    total_after = sum(x["recommended_debt"] for x in alloc) or 1.0
+    for x in alloc:
+        x["weight_capped"] = float(x["recommended_debt"] / total_after)
+
+    return {"horizon": horizon, "risk_budget": budget, "allocations": alloc}
+
+
+def signal_for_vault(vault: dict[str, t.Any], horizon: str) -> dict[str, t.Any]:
+    # Derive signal from market proxy (ETH) and risk appetite. Deterministic but feels "AI-ish".
+    px = MARKET.px_at("ETH", utc_ts())
+    cap = float(vault.get("deposit_cap") or 1.0)
+    fee_drag = (float(vault.get("mgmt_fee_bps_per_year") or 0) / 10_000.0) * 0.55
+    appetite = clamp((cap / 25_000_000.0) ** 0.09, 0.9, 1.1) * (1.0 - fee_drag)
+    # Score 0..1
