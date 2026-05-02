@@ -154,3 +154,55 @@ _DB_LOCK = threading.RLock()
 
 
 @contextlib.contextmanager
+def db() -> t.Iterator[sqlite3.Connection]:
+    with _DB_LOCK:
+        conn = _db_connect()
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+
+def db_exec(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> sqlite3.Cursor:
+    return conn.execute(sql, params)
+
+
+def db_many(conn: sqlite3.Connection, sql: str, rows: list[tuple]) -> None:
+    conn.executemany(sql, rows)
+
+
+def row_to_dict(r: sqlite3.Row) -> dict[str, t.Any]:
+    return {k: r[k] for k in r.keys()}
+
+
+def ensure_schema() -> None:
+    schema = [
+        """
+        CREATE TABLE IF NOT EXISTS meta (
+            k TEXT PRIMARY KEY,
+            v TEXT NOT NULL
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            is_admin INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            last_login_at INTEGER
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            csrf_token TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            last_seen_at INTEGER NOT NULL,
+            user_agent TEXT,
+            ip TEXT,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
