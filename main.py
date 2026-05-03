@@ -1402,3 +1402,55 @@ def api_portfolio(portfolio_id: str):
         p["value"] = float(px * float(p["qty"]))
         mtm += p["value"]
     return api_ok({"portfolio": row_to_dict(pf), "positions": positions, "mtm_value": float(mtm)})
+
+
+def tally_catalog_counts() -> dict[str, int]:
+    """Lightweight inventory for dashboards (auth-guarded endpoint uses this)."""
+    with db() as conn:
+        vaults = int(conn.execute("SELECT COUNT(*) AS c FROM vaults").fetchone()["c"])
+        strategies = int(conn.execute("SELECT COUNT(*) AS c FROM strategies").fetchone()["c"])
+        signals = int(conn.execute("SELECT COUNT(*) AS c FROM signals").fetchone()["c"])
+    return {"vaults": vaults, "strategies": strategies, "signals": signals}
+
+
+@app.get("/api/catalog/stats")
+def api_catalog_stats():
+    require_auth()
+    body = tally_catalog_counts()
+    body["ts"] = utc_ts()
+    return api_ok(body)
+
+
+# -----------------------------
+# Static serving for Ixmalu
+# -----------------------------
+
+
+@app.get("/wasuxir")
+def legacy_wasuxir_alias():
+    return redirect("/ixmalu", code=302)
+
+
+@app.get("/ixmalu")
+def page_ixmalu():
+    # Convenience: redirect to the standalone interface folder if served by something else.
+    # If you run only this app, it can serve the local Ixmalu index directly.
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Ixmalu"))
+    if os.path.exists(os.path.join(root, "index.html")):
+        return send_from_directory(root, "index.html")
+    html = (
+        "<!doctype html><meta charset=utf-8><title>Zorp41</title>"
+        "<body style=background:#0b1020;color:#eaf0ff;font-family:system-ui;padding:24px>"
+        "<p>Missing <code>Ixmalu/index.html</code> next to this backend.</p></body>"
+    )
+    return make_response(html, 404, {"Content-Type": "text/html; charset=utf-8"})
+
+
+@app.get("/ixmalu/<path:path>")
+def page_ixmalu_asset(path: str):
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Ixmalu"))
+    return send_from_directory(root, path)
+
+
+# -----------------------------
+# Startup
