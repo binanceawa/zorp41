@@ -1246,3 +1246,55 @@ def api_signals(vault_id: str):
 def api_signal_generate(vault_id: str):
     ctx = require_auth()
     v = vault_get(vault_id)
+    if not v:
+        return api_err("not_found", 404)
+    with db() as conn:
+        for horizon in ("1d", "7d", "30d"):
+            s = signal_for_vault(v, horizon)
+            conn.execute(
+                "INSERT INTO signals(id, vault_id, ts, horizon, score, rationale, payload_json) VALUES(?,?,?,?,?,?,?)",
+                (random_public_id("sig"), vault_id, utc_ts(), horizon, float(s["score"]), str(s["rationale"]), json_dumps(s["payload"])),
+            )
+    audit("signal_generate", ctx["user_id"], {"vault_id": vault_id})
+    return api_ok({"vault_id": vault_id, "generated": 3})
+
+
+@app.post("/api/backtest")
+def api_backtest_start():
+    """
+    Start a backtest job.
+    Body:
+      { "symbol":"ETH", "strategy":"momentum", "days":120, "step_min":60, "fee_bps":6, "slippage_bps":9 }
+    """
+    ctx = require_auth()
+    require_mutation(ctx)
+    j = parse_json(required=False)
+    symbol = str(j.get("symbol") or "ETH").strip().upper()
+    strategy = str(j.get("strategy") or "momentum").strip()
+    days = int(j.get("days") or 120)
+    step_min = int(j.get("step_min") or 60)
+    fee_bps = float(j.get("fee_bps") or 6.0)
+    slippage_bps = float(j.get("slippage_bps") or 9.0)
+    if days <= 5 or days > 2000:
+        return api_err("days_range", 400)
+    if step_min < 5 or step_min > 1440:
+        return api_err("step_range", 400)
+
+    end_ts = utc_ts()
+    start_ts = end_ts - days * 86400
+    start_ts = start_ts - (start_ts % (step_min * 60))
+    end_ts = end_ts - (end_ts % (step_min * 60))
+    p = BacktestParams(
+        symbol=symbol,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        step_sec=step_min * 60,
+        fee_bps=fee_bps,
+        slippage_bps=slippage_bps,
+        strategy=strategy,
+    )
+
+    jid = job_create("backtest")
+    audit("job_create", ctx["user_id"], {"job_id": jid, "kind": "backtest", "symbol": symbol, "strategy": strategy})
+
+    def _run():
