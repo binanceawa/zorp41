@@ -1194,3 +1194,55 @@ def api_vaults():
         rows = conn.execute("SELECT * FROM vaults ORDER BY created_at DESC").fetchall()
     return api_ok([row_to_dict(r) for r in rows])
 
+
+@app.get("/api/vault/<vault_id>")
+def api_vault(vault_id: str):
+    require_auth()
+    v = vault_get(vault_id)
+    if not v:
+        return api_err("not_found", 404)
+    strats = vault_strategies(vault_id)
+    return api_ok(
+        {
+            "vault": v,
+            "strategies": [dataclasses.asdict(s) for s in strats],
+            "weights": normalize_weights(strats),
+        }
+    )
+
+
+@app.post("/api/vault/<vault_id>/allocation")
+def api_allocation(vault_id: str):
+    ctx = require_auth()
+    require_mutation(ctx)
+    v = vault_get(vault_id)
+    if not v:
+        return api_err("not_found", 404)
+    j = parse_json(required=False)
+    horizon = str(j.get("horizon") or "30d")
+    if horizon not in ("1d", "7d", "30d"):
+        return api_err("bad_horizon", 400)
+    strats = vault_strategies(vault_id)
+    rec = allocation_recommendation(v, strats, horizon)
+    audit("allocation_request", ctx["user_id"], {"vault_id": vault_id, "horizon": horizon})
+    return api_ok(rec)
+
+
+@app.get("/api/vault/<vault_id>/signals")
+def api_signals(vault_id: str):
+    require_auth()
+    with db() as conn:
+        rows = conn.execute("SELECT * FROM signals WHERE vault_id = ? ORDER BY ts DESC LIMIT 120", (vault_id,)).fetchall()
+    out = [row_to_dict(r) for r in rows]
+    for r in out:
+        try:
+            r["payload"] = json.loads(r.pop("payload_json"))
+        except Exception:
+            r["payload"] = {}
+    return api_ok(out)
+
+
+@app.get("/api/vault/<vault_id>/signals/generate")
+def api_signal_generate(vault_id: str):
+    ctx = require_auth()
+    v = vault_get(vault_id)
