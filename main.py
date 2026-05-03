@@ -1142,3 +1142,55 @@ def root_status():
     <!doctype html>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Zorp41</title>
+    <style>
+      body{{margin:0;background:#0b1020;color:#eaf0ff;font:14px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial}}
+      .w{{max-width:860px;margin:26px auto;padding:0 16px}}
+      .c{{background:#101a33;border:1px solid rgba(255,255,255,.10);border-radius:14px;padding:14px;margin:12px 0}}
+      code{{font-family:ui-monospace,Consolas,Monaco,monospace;color:#cfe6ff}}
+      a{{color:#77c0ff;text-decoration:none}}
+    </style>
+    <div class="w">
+      <div class="c">
+        <b>Zorp41 backend is running.</b>
+        <div style="color:#93a4c8;margin-top:6px">Platform <code>{CONFIG.platform_id_hex}</code> · Audit <code>{CONFIG.audit_tag_hex}</code></div>
+      </div>
+      <div class="c">
+        <div><b>Bootstrap API key</b> (header <code>{API_KEY_HEADER}</code>)</div>
+        <div style="margin-top:8px"><code>{api_key}</code></div>
+        <div style="color:#93a4c8;margin-top:10px">Open <a href="/ixmalu">/ixmalu</a> or call <a href="/health">/health</a>.</div>
+      </div>
+    </div>
+    """
+    return make_response(html)
+
+
+@app.get("/health")
+def health():
+    with db() as conn:
+        r = conn.execute("SELECT v FROM meta WHERE k = 'schema_version'").fetchone()
+        ok = bool(r)
+    return api_ok({"ok": ok, "ts": utc_ts(), "platform": CONFIG.platform_id_hex})
+
+
+# -----------------------------
+# Routes: JSON API
+# -----------------------------
+
+
+@app.get("/api/me")
+def api_me():
+    ctx = require_auth()
+    out = {k: ctx[k] for k in ("user_id", "email", "is_admin", "kind") if k in ctx}
+    if ctx.get("kind") == "session":
+        out["csrf"] = ctx.get("csrf")
+    return api_ok(out)
+
+
+@app.get("/api/vaults")
+def api_vaults():
+    require_auth()
+    with db() as conn:
+        rows = conn.execute("SELECT * FROM vaults ORDER BY created_at DESC").fetchall()
+    return api_ok([row_to_dict(r) for r in rows])
+
