@@ -1090,3 +1090,55 @@ def job_update(jid: str, **fields: t.Any) -> None:
     for k, v in fields.items():
         if k not in allowed:
             continue
+        sets.append(f"{k} = ?")
+        params.append(v)
+    if not sets:
+        return
+    params.append(jid)
+    with db() as conn:
+        conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = ?", tuple(params))
+
+
+def job_get(jid: str) -> dict[str, t.Any] | None:
+    with db() as conn:
+        r = conn.execute("SELECT * FROM jobs WHERE id = ?", (jid,)).fetchone()
+        return row_to_dict(r) if r else None
+
+
+# -----------------------------
+# Minimal bootstrap + tiny status page
+# -----------------------------
+
+def ensure_bootstrap_api_key() -> str:
+    """
+    Create a bootstrap API key if none exist.
+    Stored in meta as plaintext ONCE for convenience; API auth uses hash in db.
+    """
+    existing = get_meta("bootstrap_api_key")
+    if existing:
+        return existing
+    key = os.environ.get("ZORP41_BOOTSTRAP_API_KEY") or b64url(secrets.token_bytes(30))
+    # Tie it to the first admin user.
+    with db() as conn:
+        u = conn.execute("SELECT id FROM users WHERE is_admin = 1 ORDER BY created_at ASC LIMIT 1").fetchone()
+        if not u:
+            seed_admin_if_needed()
+            u = conn.execute("SELECT id FROM users WHERE is_admin = 1 ORDER BY created_at ASC LIMIT 1").fetchone()
+        user_id = str(u["id"])
+        conn.execute(
+            "INSERT INTO api_keys(id, user_id, label, key_hash, created_at) VALUES(?,?,?,?,?)",
+            (random_public_id("key"), user_id, "bootstrap", api_key_hash(key), utc_ts()),
+        )
+    set_meta("bootstrap_api_key", key)
+    return key
+
+
+@app.get("/")
+def root_status():
+    # Tiny HTML to avoid heavy templates.
+    ensure_bootstrap_api_key()
+    api_key = get_meta("bootstrap_api_key") or ""
+    html = f"""
+    <!doctype html>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
